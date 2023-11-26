@@ -3,6 +3,9 @@
 #include <vector>
 #include <fstream>
 #include <regex>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <filesystem>
 
@@ -33,7 +36,7 @@ class URL {
             // Check Protocol
             if (scheme != "http" && scheme != "https") {
                 cout << "\033[31mUnsupported or Invalid scheme/protocol\033[33m" << endl;
-                cout << "This program only support HTTP abd HTTPS\033[0m" << endl;
+                cout << "This program only support HTTP and HTTPS url, and request will only be sent in HTTP\033[0m" << endl;
                 throw invalid_argument("Unsupported or Invalid scheme/protocol");
             }
 
@@ -95,6 +98,26 @@ class URL {
             if (!fragment.empty()) url += '#' + fragment;
             return url;
         }
+        int getPort() {
+            if (port > 0 && port < 65536) {
+                return port;
+            } else if (port == 0) {
+                return 80;
+            } else {
+                return -1;
+            }
+        }
+        string getHost() {
+            return host;
+        }
+        string getPath() {
+            string pth;
+            pth.append(path[0]);
+            for (int i = 1; i < path.size(); i++) {
+                pth.append('/' + path[i]);
+            }
+            return pth;
+        }
 };
 
 bool isWritable(const string& filePath) {
@@ -119,6 +142,58 @@ bool is_valid_url(const string& url) {
   return regex_match(url, pattern);
 }
 
+int HTTP_protocol(URL& target_url, string connection_type) {
+    // establish socket connection
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        cerr << "Failed to establish socket" << endl;
+        return -1;
+    }
+
+    // Setup Connection info
+    struct sockaddr_in addr;
+    bzero(&addr,sizeof(addr));
+    addr.sin_family = PF_INET;
+    addr.sin_port = htons(target_url.getPort());
+    addr.sin_addr.s_addr = inet_addr(target_url.getHost().c_str());
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        std::cerr << "Failed to Connect to Host" << std::endl;
+        close(sockfd);
+        return -1;
+    }
+
+    // Setup HTTP Request header
+    string request = "GET " + target_url.getPath() + " HTTP/1.1\r\n";
+    request += "HOST: " + target_url.getHost() + "\r\n";
+    request += "Connection: " + connection_type + "\r\n\r\n";
+    //char request[] = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nConnection: close\r\n\r\n";
+
+    // Send HTTP Request
+    int n = send(sockfd, request.c_str(), strlen(request.c_str()), 0);
+    if (n < 0) {
+        std::cerr << "Failed to sent HTTP Request" << std::endl;
+        close(sockfd);
+        return -1;
+    }
+
+    // Received HTTP Response
+    char buffer[1048576];
+    n = read(sockfd, buffer, sizeof(buffer));
+    if (n < 0) {
+        std::cerr << "Failed to received HTTP Response" << std::endl;
+        close(sockfd);
+        return -1;
+    }
+
+    // Display HTTP Response
+    std::cout << buffer << std::endl;
+
+    // Close socket Connection
+    close(sockfd);
+    return 0;
+  }
+
+
 int main(int argc, char *argv[]) {
     string input_url ,dir;
     cout << "Welcome to website downloader\n";
@@ -140,7 +215,7 @@ int main(int argc, char *argv[]) {
     //     cout << "\033[31mInvalid URL\033[0m" << endl;
     URL target_url(input_url);
     target_url.PrintParsedURL();
-    cout << "target url : " << target_url.PrintURL() << endl;
+    cout << "\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
 
 
     // check file accessibility
@@ -151,6 +226,9 @@ int main(int argc, char *argv[]) {
     else if (!isWritable(dir))
         cout << "\033[31mOutput Directionary cannot access\033[0m" << endl;
 
+    cout << "\033[34mstorage directionary : \033[0m" << dir << endl;
 
-    cout << "storage directionary : " << dir << endl;
+    // send request
+    string connection_type = "close";
+    HTTP_protocol(target_url, connection_type);
 }
