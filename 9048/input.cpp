@@ -4,6 +4,7 @@
 #include <fstream>
 #include <regex>
 #include <unistd.h>
+#include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -110,15 +111,52 @@ class URL {
         string getHost() {
             return host;
         }
-        string getPath() {
+        string getHTTPRequestPath() {
             string pth;
-            pth.append(path[0]);
-            for (int i = 1; i < path.size(); i++) {
+            for (int i = 0; i < path.size(); i++) {
                 pth.append('/' + path[i]);
             }
+            if (!query.empty()) pth.append('?' + query);
             return pth;
         }
 };
+
+typedef struct HTTP_Respond_Headers {
+    int status_code;
+    int Content_length;
+    string Content_type;
+    string Connection;
+} HTTP_Respond_Header;
+
+HTTP_Respond_Header ParseHeaders(string respond_header) {
+    HTTP_Respond_Header Header;
+
+    // Extract status code
+    size_t status_code_start = respond_header.find("HTTP/1.1 ") + 9;
+    size_t status_code_end = respond_header.find("\r\n", status_code_start);
+    Header.status_code = stoi(respond_header.substr(status_code_start, status_code_end - status_code_start));
+
+    // Extract Content-Length
+    size_t content_length_start = respond_header.find("Content-Length:") + 16;
+    size_t content_length_end = respond_header.find("\r\n", content_length_start);
+    Header.Content_length = stoi(respond_header.substr(content_length_start, content_length_end - content_length_start));
+
+    // Extract Content-Type
+    if (respond_header.find("Content-Type:") != string::npos) {
+        size_t content_type_start = respond_header.find("Content-Type:") + 14;
+        size_t content_type_end = respond_header.find("\r\n", content_type_start);
+        Header.Content_type = respond_header.substr(content_type_start, content_type_end - content_type_start);
+    }
+
+    // Extract Connection
+    if (respond_header.find("Connection:") != string::npos) {
+        size_t connection_start = respond_header.find("Connection:") + 12;
+        size_t connection_end = respond_header.find("\r\n", connection_start);
+        Header.Connection = respond_header.substr(connection_start, connection_end - connection_start);
+    }
+
+    return Header;
+}
 
 bool isWritable(const string& filePath) {
   struct stat st;
@@ -143,6 +181,13 @@ bool is_valid_url(const string& url) {
 }
 
 int HTTP_protocol(URL& target_url, string connection_type) {
+    // resolve hostname to IP address
+    struct hostent* hostaddr = gethostbyname(target_url.getHost().c_str());
+    if (!hostaddr) {
+        cerr << "Failed to resolve hostname: " << target_url.getHost() << endl;
+        return -1;
+    }
+
     // establish socket connection
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
@@ -150,12 +195,11 @@ int HTTP_protocol(URL& target_url, string connection_type) {
         return -1;
     }
 
-    // Setup Connection info
+    // setup connection info
     struct sockaddr_in addr;
-    bzero(&addr,sizeof(addr));
-    addr.sin_family = PF_INET;
+    addr.sin_family = AF_INET;
     addr.sin_port = htons(target_url.getPort());
-    addr.sin_addr.s_addr = inet_addr(target_url.getHost().c_str());
+    addr.sin_addr = *((struct in_addr *)hostaddr->h_addr);
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         std::cerr << "Failed to Connect to Host" << std::endl;
         close(sockfd);
@@ -163,10 +207,11 @@ int HTTP_protocol(URL& target_url, string connection_type) {
     }
 
     // Setup HTTP Request header
-    string request = "GET " + target_url.getPath() + " HTTP/1.1\r\n";
+    string request = "GET " + target_url.getHTTPRequestPath() + " HTTP/1.1\r\n";
     request += "HOST: " + target_url.getHost() + "\r\n";
     request += "Connection: " + connection_type + "\r\n\r\n";
     //char request[] = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nConnection: close\r\n\r\n";
+    cout << "request: \n\033[32m" << request << "\033[0m" << endl;
 
     // Send HTTP Request
     int n = send(sockfd, request.c_str(), strlen(request.c_str()), 0);
@@ -177,16 +222,44 @@ int HTTP_protocol(URL& target_url, string connection_type) {
     }
 
     // Received HTTP Response
-    char buffer[1048576];
-    n = read(sockfd, buffer, sizeof(buffer));
-    if (n < 0) {
-        std::cerr << "Failed to received HTTP Response" << std::endl;
-        close(sockfd);
-        return -1;
+    // Received Headers
+    string headers;
+    char buffer[1024];
+    while (headers.find("\r\n\r\n") == string::npos) {
+        n = read(sockfd, buffer, sizeof(buffer));
+        if (n < 0) {
+            std::cerr << "Failed to received HTTP Response" << std::endl;
+            close(sockfd);
+            return -1;
+        }
+        headers.append(buffer, n);
+    }
+
+    // Parse Content-Length header to determine body size
+    HTTP_Respond_Header Header = ParseHeaders(headers);
+
+    // Receive HTTP Response Body
+    string body;
+    char page_buffer[1048576];
+    while (body.length() < Header.Content_length) {
+        n = read(sockfd, page_buffer, sizeof(page_buffer));
+        if (n < 0) {
+            std::cerr << "Failed to receive HTTP Response Body" << std::endl;
+            close(sockfd);
+            return -1;
+        }
+
+        body.append(buffer, n);
     }
 
     // Display HTTP Response
-    std::cout << buffer << std::endl;
+    // std::cout << headers << std::endl;
+    cout << "status code: " << Header.status_code << endl;
+    cout << "Content Len: " << Header.Content_length << endl;
+    cout << "Content type: " << Header.Content_type << endl;
+    cout << "connection: " << Header.Connection << endl;
+    cout << "body: " << endl << body << endl;
+
 
     // Close socket Connection
     close(sockfd);
@@ -214,7 +287,7 @@ int main(int argc, char *argv[]) {
     // if (!is_valid_url(input_url))
     //     cout << "\033[31mInvalid URL\033[0m" << endl;
     URL target_url(input_url);
-    target_url.PrintParsedURL();
+    //target_url.PrintParsedURL();
     cout << "\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
 
 
@@ -231,4 +304,6 @@ int main(int argc, char *argv[]) {
     // send request
     string connection_type = "close";
     HTTP_protocol(target_url, connection_type);
+
+    return 0;
 }
