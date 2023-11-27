@@ -119,6 +119,9 @@ class URL {
             if (!query.empty()) pth.append('?' + query);
             return pth;
         }
+        vector<string> getPath() {
+            return path;
+        }
 };
 
 typedef struct HTTP_Respond_Headers {
@@ -128,7 +131,7 @@ typedef struct HTTP_Respond_Headers {
     string Connection;
 } HTTP_Respond_Header;
 
-HTTP_Respond_Header ParseHeaders(string respond_header) {
+HTTP_Respond_Header ParseHeaders(string& respond_header) {
     HTTP_Respond_Header Header;
 
     // Extract status code
@@ -180,7 +183,7 @@ bool is_valid_url(const string& url) {
   return regex_match(url, pattern);
 }
 
-int HTTP_protocol(URL& target_url, string connection_type) {
+int HTTP_protocol(URL& target_url, string connection_type, string& body) {
     // resolve hostname to IP address
     struct hostent* hostaddr = gethostbyname(target_url.getHost().c_str());
     if (!hostaddr) {
@@ -223,42 +226,30 @@ int HTTP_protocol(URL& target_url, string connection_type) {
 
     // Received HTTP Response
     // Received Headers
-    string headers;
-    char buffer[1024];
-    while (headers.find("\r\n\r\n") == string::npos) {
-        n = read(sockfd, buffer, sizeof(buffer));
-        if (n < 0) {
-            std::cerr << "Failed to received HTTP Response" << std::endl;
-            close(sockfd);
-            return -1;
-        }
-        headers.append(buffer, n);
+    string respond;
+    char buffer[1048576];
+    n = read(sockfd, buffer, sizeof(buffer));
+    if (n < 0) {
+        std::cerr << "Failed to received HTTP Response" << std::endl;
+        close(sockfd);
+        return -1;
     }
+    respond.append(buffer, n);
 
     // Parse Content-Length header to determine body size
-    HTTP_Respond_Header Header = ParseHeaders(headers);
+    HTTP_Respond_Header Header = ParseHeaders(respond);
 
-    // Receive HTTP Response Body
-    string body;
-    char page_buffer[1048576];
-    while (body.length() < Header.Content_length) {
-        n = read(sockfd, page_buffer, sizeof(page_buffer));
-        if (n < 0) {
-            std::cerr << "Failed to receive HTTP Response Body" << std::endl;
-            close(sockfd);
-            return -1;
-        }
-
-        body.append(buffer, n);
-    }
-
-    // Display HTTP Response
-    // std::cout << headers << std::endl;
     cout << "status code: " << Header.status_code << endl;
     cout << "Content Len: " << Header.Content_length << endl;
     cout << "Content type: " << Header.Content_type << endl;
     cout << "connection: " << Header.Connection << endl;
-    cout << "body: " << endl << body << endl;
+
+    // Receive HTTP Response Body
+    body = respond.substr(respond.find("\r\n\r\n") + 4, Header.Content_length);
+
+    // Display HTTP Response
+    // std::cout << headers << std::endl;
+    // cout << "body: " << endl << body << endl;
 
 
     // Close socket Connection
@@ -303,7 +294,30 @@ int main(int argc, char *argv[]) {
 
     // send request
     string connection_type = "close";
-    HTTP_protocol(target_url, connection_type);
+    string website;
+    HTTP_protocol(target_url, connection_type, website);
+    cout << "body: " << endl << website << endl;
 
+    // create directionary
+    filesystem::path src = output_dir;
+    src /= target_url.getHost();
+    filesystem::create_directory(src);
+
+    // store webpage
+    filesystem::path filepath = src;
+    filepath /= target_url.getPath()[target_url.getPath().size() - 1];
+    // // begin data write in
+    ofstream site;
+    site.open(filepath);
+    site << website << endl;
+    site.close();
+
+    // site.open(filepath, ios::out);
+    // if (site.is_open()) {
+    //     site.write(website.c_str(), sizeof(website));
+    //     site.close();
+    // } else {
+    //     std::cerr << "Error opening file: " << filepath << std::endl;
+    // }
     return 0;
 }
