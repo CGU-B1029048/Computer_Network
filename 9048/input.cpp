@@ -162,21 +162,40 @@ HTTP_Respond_Header ParseHeaders(string& respond_header) {
     return Header;
 }
 
-vector<string> Extract_image(string& body) {
+vector<string> Extract_image(string& body, string host) {
     vector<string> urls;
-    size_t image_tag_start = 0, image_tag_end;
-    size_t src_start = 0, src_end, i = 0;
+    size_t image_tag_start = 0, image_tag_end, i = 0;
     while (body.find("<img", image_tag_start) != string::npos) {
         // find <img> tag
         image_tag_start = body.find("<img", image_tag_start);
         image_tag_end = body.find(">", image_tag_start);
-        urls.push_back(body.substr(image_tag_start, image_tag_end - image_tag_start + 1));
-        image_tag_start++;
 
         // extract src from <img>
-        src_start = urls[i].find("src=") + 5; 
-        src_end = urls[i].find('\"', src_start);
-        urls[i] = urls[i].substr(src_start, src_end - src_start);
+        image_tag_start = body.find("src=", image_tag_start) + 5; 
+        image_tag_end = body.find('\"', image_tag_start);
+        
+        urls.push_back(body.substr(image_tag_start, image_tag_end - image_tag_start));
+
+        // check link is in relative path
+        if (urls[i].find("http://") != string::npos || urls[i].find("https://") != string::npos) {
+            // Extract path and query components
+            size_t path_start = urls[i].find("//") + 2;
+            size_t path_end = urls[i].find('?', path_start);
+            if (path_end == string::npos) {
+                path_end = urls[i].size();
+            }
+
+            // Extract path
+            urls[i] = urls[i].substr(path_start, path_end - path_start);
+            urls[i] = urls[i].substr(host.length() + 1);            
+        }
+
+        if (urls[i].at(0) == '/') urls[i].erase(0,1);
+
+        // Update website with relative URL
+        body.replace(image_tag_start, image_tag_end - image_tag_start, urls[i]);
+
+        image_tag_start++;
         i++;
     }
 
@@ -205,11 +224,11 @@ bool is_valid_url(const string& url) {
   return regex_match(url, pattern);
 }
 
-int HTTP_protocol(URL& target_url, string connection_type, string& body, HTTP_Respond_Header& Header) {
+int HTTP_protocol(string host, string path, int port, string connection_type, string& body, HTTP_Respond_Header& Header) {
     // resolve hostname to IP address
-    struct hostent* hostaddr = gethostbyname(target_url.getHost().c_str());
+    struct hostent* hostaddr = gethostbyname(host.c_str());
     if (!hostaddr) {
-        cerr << "Failed to resolve hostname: " << target_url.getHost() << endl;
+        cerr << "Failed to resolve hostname: " << host << endl;
         return -1;
     }
 
@@ -223,7 +242,7 @@ int HTTP_protocol(URL& target_url, string connection_type, string& body, HTTP_Re
     // setup connection info
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(target_url.getPort());
+    addr.sin_port = htons(port);
     addr.sin_addr = *((struct in_addr *)hostaddr->h_addr);
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         std::cerr << "Failed to Connect to Host" << std::endl;
@@ -232,8 +251,8 @@ int HTTP_protocol(URL& target_url, string connection_type, string& body, HTTP_Re
     }
 
     // Setup HTTP Request header
-    string request = "GET " + target_url.getHTTPRequestPath() + " HTTP/1.1\r\n";
-    request += "HOST: " + target_url.getHost() + "\r\n";
+    string request = "GET " + path + " HTTP/1.1\r\n";
+    request += "HOST: " + host + "\r\n";
     request += "Connection: " + connection_type + "\r\n\r\n";
     //char request[] = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nConnection: close\r\n\r\n";
     cout << "request: \n\033[32m" << request << "\033[0m" << endl;
@@ -289,13 +308,15 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
     
     // create a directionary with name of hostname if not exist
     if (!filesystem::exists(fp)) filesystem::create_directory(fp);
+    cout << fp << endl;
 
     // create directionary according to file path if not exist
     for (int i = 0; i < file_dir_path.size()-1; i++) {
         fp /= file_dir_path[i];
         if (!filesystem::exists(fp)) filesystem::create_directory(fp);
+        cout << fp << endl;
     }
-    
+    cout << "writing data in : " << fp / file_dir_path.back() << endl;
     // write data in
     outfile.open(fp / file_dir_path.back());
     outfile << file_data << endl;
@@ -340,18 +361,42 @@ int main(int argc, char *argv[]) {
     string connection_type = "close";
     string website_body;
     HTTP_Respond_Header respond_Header;
-    int status_code = HTTP_protocol(target_url, connection_type, website_body, respond_Header);
+    int status_code = HTTP_protocol(target_url.getHost(), target_url.getHTTPRequestPath(), target_url.getPort(), connection_type, website_body, respond_Header);
     cout << "body: " << endl << website_body << endl;
-
-    // find all image url
-    vector<string> image_urls;
-    image_urls = Extract_image(website_body);
-    
-    for (int i = 0; i < image_urls.size(); i++) 
-        cout << image_urls[i] << endl;
 
     // store webpage in file
     store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
+
+    // find all image url
+    vector<string> image_urls, image_path;
+    image_urls = Extract_image(website_body, target_url.getHost());
+
+    // Download images
+    string pictures;
+    HTTP_Respond_Header pic_Header;
+    for (int i = 0, pos = 0; i < image_urls.size(); i++) {
+        // send request and get picture
+        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header);
+        // decode image path
+        string tmp = image_urls[i];
+        do {
+            image_path.push_back(tmp.substr(0, pos));
+            tmp = tmp.substr(pos + 1);
+        } while ((pos = tmp.find('/', 0)) != string::npos);
+
+        for( int p = 0; p < image_path.size(); p++) {
+            cout << image_path[p] << '/';
+        }
+        cout << endl;
+        // store image
+        cout << "store pic :" << i+1 << endl;
+        store_webpage(output_dir / target_url.getHost(), image_path, pictures);
+
+        image_path.clear();
+    }
+    // for (int i = 0; i < image_urls.size(); i++) 
+    //     cout << image_urls[i] << endl;
+
 
 
     // // create directionary
