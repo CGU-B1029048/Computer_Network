@@ -254,9 +254,21 @@ int HTTP_protocol(URL& target_url, string connection_type, string& body) {
 
     // Close socket Connection
     close(sockfd);
-    return 0;
+    return Header.status_code;
   }
 
+void store_webpage(filesystem::path src_dir, string dest_dir, string filename, string file_data) {
+    filesystem::path fp = src_dir / dest_dir;
+    ofstream outfile;
+    
+    // create directionary if not exist
+    if (!filesystem::exists(fp)) filesystem::create_directory(fp);
+    
+    // write data in
+    outfile.open(fp / filename);
+    outfile << file_data << endl;
+    outfile.close();
+}
 
 int main(int argc, char *argv[]) {
     string input_url ,dir;
@@ -295,22 +307,26 @@ int main(int argc, char *argv[]) {
     // send request
     string connection_type = "close";
     string website;
-    HTTP_protocol(target_url, connection_type, website);
+    int status_code = HTTP_protocol(target_url, connection_type, website);
     cout << "body: " << endl << website << endl;
 
-    // create directionary
-    filesystem::path src = output_dir;
-    src /= target_url.getHost();
-    filesystem::create_directory(src);
+    store_webpage(output_dir, target_url.getHost(), target_url.getPath()[target_url.getPath().size()-1], website);
 
-    // store webpage
-    filesystem::path filepath = src;
-    filepath /= target_url.getPath()[target_url.getPath().size() - 1];
-    // // begin data write in
-    ofstream site;
-    site.open(filepath);
-    site << website << endl;
-    site.close();
+    
+    
+    // // create directionary
+    // filesystem::path src = output_dir;
+    // src /= target_url.getHost();
+    // filesystem::create_directory(src);
+
+    // // store webpage
+    // filesystem::path filepath = src;
+    // filepath /= target_url.getPath()[target_url.getPath().size() - 1];
+    // // // begin data write in
+    // ofstream site;
+    // site.open(filepath);
+    // site << website << endl;
+    // site.close();
 
     // site.open(filepath, ios::out);
     // if (site.is_open()) {
