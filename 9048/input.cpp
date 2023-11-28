@@ -133,32 +133,54 @@ typedef struct HTTP_Respond_Headers {
 
 HTTP_Respond_Header ParseHeaders(string& respond_header) {
     HTTP_Respond_Header Header;
+    size_t field_start, field_end;
 
     // Extract status code
-    size_t status_code_start = respond_header.find("HTTP/1.1 ") + 9;
-    size_t status_code_end = respond_header.find("\r\n", status_code_start);
-    Header.status_code = stoi(respond_header.substr(status_code_start, status_code_end - status_code_start));
+    field_start = respond_header.find("HTTP/1.1 ") + 9;
+    field_end = respond_header.find("\r\n", field_start);
+    Header.status_code = stoi(respond_header.substr(field_start, field_end - field_start));
 
     // Extract Content-Length
-    size_t content_length_start = respond_header.find("Content-Length:") + 16;
-    size_t content_length_end = respond_header.find("\r\n", content_length_start);
-    Header.Content_length = stoi(respond_header.substr(content_length_start, content_length_end - content_length_start));
+    field_start = respond_header.find("Content-Length:") + 16;
+    field_end = respond_header.find("\r\n", field_start);
+    Header.Content_length = stoi(respond_header.substr(field_start, field_end - field_start));
 
     // Extract Content-Type
     if (respond_header.find("Content-Type:") != string::npos) {
-        size_t content_type_start = respond_header.find("Content-Type:") + 14;
-        size_t content_type_end = respond_header.find("\r\n", content_type_start);
-        Header.Content_type = respond_header.substr(content_type_start, content_type_end - content_type_start);
+        field_start = respond_header.find("Content-Type:") + 14;
+        field_end = respond_header.find("\r\n", field_start);
+        Header.Content_type = respond_header.substr(field_start, field_end - field_start);
     }
 
     // Extract Connection
     if (respond_header.find("Connection:") != string::npos) {
-        size_t connection_start = respond_header.find("Connection:") + 12;
-        size_t connection_end = respond_header.find("\r\n", connection_start);
-        Header.Connection = respond_header.substr(connection_start, connection_end - connection_start);
+        field_start = respond_header.find("Connection:") + 12;
+        field_end = respond_header.find("\r\n", field_start);
+        Header.Connection = respond_header.substr(field_start, field_end - field_start);
     }
 
     return Header;
+}
+
+vector<string> Extract_image(string& body) {
+    vector<string> urls;
+    size_t image_tag_start = 0, image_tag_end;
+    size_t src_start = 0, src_end, i = 0;
+    while (body.find("<img", image_tag_start) != string::npos) {
+        // find <img> tag
+        image_tag_start = body.find("<img", image_tag_start);
+        image_tag_end = body.find(">", image_tag_start);
+        urls.push_back(body.substr(image_tag_start, image_tag_end - image_tag_start + 1));
+        image_tag_start++;
+
+        // extract src from <img>
+        src_start = urls[i].find("src=") + 5; 
+        src_end = urls[i].find('\"', src_start);
+        urls[i] = urls[i].substr(src_start, src_end - src_start);
+        i++;
+    }
+
+    return urls;
 }
 
 bool isWritable(const string& filePath) {
@@ -183,7 +205,7 @@ bool is_valid_url(const string& url) {
   return regex_match(url, pattern);
 }
 
-int HTTP_protocol(URL& target_url, string connection_type, string& body) {
+int HTTP_protocol(URL& target_url, string connection_type, string& body, HTTP_Respond_Header& Header) {
     // resolve hostname to IP address
     struct hostent* hostaddr = gethostbyname(target_url.getHost().c_str());
     if (!hostaddr) {
@@ -227,17 +249,21 @@ int HTTP_protocol(URL& target_url, string connection_type, string& body) {
     // Received HTTP Response
     // Received Headers
     string respond;
-    char buffer[1048576];
-    n = read(sockfd, buffer, sizeof(buffer));
-    if (n < 0) {
-        std::cerr << "Failed to received HTTP Response" << std::endl;
-        close(sockfd);
-        return -1;
-    }
-    respond.append(buffer, n);
+    char buffer[1024];
+    do {
+        n = read(sockfd, buffer, sizeof(buffer));
+        if (n < 0) {
+            std::cerr << "Failed to received HTTP Response" << std::endl;
+            close(sockfd);
+            return -1;
+        }
+        if (n > 0) {
+            respond.append(buffer, n);
+        }
+    } while (n > 0);
 
     // Parse Content-Length header to determine body size
-    HTTP_Respond_Header Header = ParseHeaders(respond);
+    Header = ParseHeaders(respond);
 
     cout << "status code: " << Header.status_code << endl;
     cout << "Content Len: " << Header.Content_length << endl;
@@ -257,15 +283,21 @@ int HTTP_protocol(URL& target_url, string connection_type, string& body) {
     return Header.status_code;
   }
 
-void store_webpage(filesystem::path src_dir, string dest_dir, string filename, string file_data) {
-    filesystem::path fp = src_dir / dest_dir;
+void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, string file_data) {
+    filesystem::path fp = src_dir;
     ofstream outfile;
     
-    // create directionary if not exist
+    // create a directionary with name of hostname if not exist
     if (!filesystem::exists(fp)) filesystem::create_directory(fp);
+
+    // create directionary according to file path if not exist
+    for (int i = 0; i < file_dir_path.size()-1; i++) {
+        fp /= file_dir_path[i];
+        if (!filesystem::exists(fp)) filesystem::create_directory(fp);
+    }
     
     // write data in
-    outfile.open(fp / filename);
+    outfile.open(fp / file_dir_path.back());
     outfile << file_data << endl;
     outfile.close();
 }
@@ -306,14 +338,22 @@ int main(int argc, char *argv[]) {
 
     // send request
     string connection_type = "close";
-    string website;
-    int status_code = HTTP_protocol(target_url, connection_type, website);
-    cout << "body: " << endl << website << endl;
+    string website_body;
+    HTTP_Respond_Header respond_Header;
+    int status_code = HTTP_protocol(target_url, connection_type, website_body, respond_Header);
+    cout << "body: " << endl << website_body << endl;
 
-    store_webpage(output_dir, target_url.getHost(), target_url.getPath()[target_url.getPath().size()-1], website);
+    // find all image url
+    vector<string> image_urls;
+    image_urls = Extract_image(website_body);
+    
+    for (int i = 0; i < image_urls.size(); i++) 
+        cout << image_urls[i] << endl;
 
-    
-    
+    // store webpage in file
+    store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
+
+
     // // create directionary
     // filesystem::path src = output_dir;
     // src /= target_url.getHost();

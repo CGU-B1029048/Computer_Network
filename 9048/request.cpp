@@ -169,16 +169,22 @@ int main() {
     }
 
     // Received HTTP Response
-    char buffer[1048576];
-    n = read(sockfd, buffer, sizeof(buffer));
-    if (n < 0) {
-        std::cerr << "Failed to received HTTP Response" << std::endl;
-        close(sockfd);
-        return -1;
-    }
+    string respond;
+    char buffer[1024];
+    do {
+        n = read(sockfd, buffer, sizeof(buffer));
+        if (n < 0) {
+            std::cerr << "Failed to received HTTP Response" << std::endl;
+            close(sockfd);
+            return -1;
+        }
+        if (n > 0) {
+            respond.append(buffer, n);
+        }
+    } while (n > 0);
 
     // Display HTTP Response
-    std::cout << buffer << std::endl;
+    std::cout << respond << std::endl;
 
     // Close socket Connection
     close(sockfd);
