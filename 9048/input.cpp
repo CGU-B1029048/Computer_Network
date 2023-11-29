@@ -284,10 +284,10 @@ int HTTP_protocol(string host, string path, int port, string connection_type, st
     // Parse Content-Length header to determine body size
     Header = ParseHeaders(respond);
 
-    cout << "status code: " << Header.status_code << endl;
-    cout << "Content Len: " << Header.Content_length << endl;
-    cout << "Content type: " << Header.Content_type << endl;
-    cout << "connection: " << Header.Connection << endl;
+    // cout << "status code: " << Header.status_code << endl;
+    // cout << "Content Len: " << Header.Content_length << endl;
+    // cout << "Content type: " << Header.Content_type << endl;
+    // cout << "connection: " << Header.Connection << endl;
 
     // Receive HTTP Response Body
     body = respond.substr(respond.find("\r\n\r\n") + 4, Header.Content_length);
@@ -343,7 +343,7 @@ int main(int argc, char *argv[]) {
     // if (!is_valid_url(input_url))
     //     cout << "\033[31mInvalid URL\033[0m" << endl;
     URL target_url(input_url);
-    //target_url.PrintParsedURL();
+    target_url.PrintParsedURL();
     cout << "\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
 
 
@@ -362,14 +362,14 @@ int main(int argc, char *argv[]) {
     string website_body;
     HTTP_Respond_Header respond_Header;
     int status_code = HTTP_protocol(target_url.getHost(), target_url.getHTTPRequestPath(), target_url.getPort(), connection_type, website_body, respond_Header);
-    cout << "body: " << endl << website_body << endl;
-
-    // store webpage in file
-    store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
+    // cout << "body: " << endl << website_body << endl;
 
     // find all image url
     vector<string> image_urls, image_path;
     image_urls = Extract_image(website_body, target_url.getHost());
+
+    // store webpage in file
+    store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
 
     // Download images
     string pictures;
@@ -377,41 +377,25 @@ int main(int argc, char *argv[]) {
     for (int i = 0, pos = 0; i < image_urls.size(); i++) {
         // send request and get picture
         int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header);
+
         // decode image path
         string tmp = image_urls[i];
-        do {
+        // // Split the path by '/'
+        while ((pos = tmp.find('/', 0)) != string::npos) {
             image_path.push_back(tmp.substr(0, pos));
             tmp = tmp.substr(pos + 1);
-        } while ((pos = tmp.find('/', 0)) != string::npos);
-
-        for( int p = 0; p < image_path.size(); p++) {
-            cout << image_path[p] << '/';
         }
-        cout << endl;
-        // store image
-        cout << "store pic :" << i+1 << endl;
+        image_path.push_back(tmp);
+
+        // store picture
         store_webpage(output_dir / target_url.getHost(), image_path, pictures);
 
+        // clear data after storage
         image_path.clear();
     }
     // for (int i = 0; i < image_urls.size(); i++) 
     //     cout << image_urls[i] << endl;
 
-
-
-    // // create directionary
-    // filesystem::path src = output_dir;
-    // src /= target_url.getHost();
-    // filesystem::create_directory(src);
-
-    // // store webpage
-    // filesystem::path filepath = src;
-    // filepath /= target_url.getPath()[target_url.getPath().size() - 1];
-    // // // begin data write in
-    // ofstream site;
-    // site.open(filepath);
-    // site << website << endl;
-    // site.close();
 
     // site.open(filepath, ios::out);
     // if (site.is_open()) {
