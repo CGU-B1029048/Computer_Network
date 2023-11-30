@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <filesystem>
+#include <ctime>
 
 using namespace std;
 
@@ -31,7 +32,8 @@ class URL {
                 scheme = url_str.substr(0, pos);
                 host = url_str.substr(pos + 3);
             } else {
-                cout << "\033[31mMissing scheme/protocol\033[0m" << endl;
+                cout << "\033[31mMissing scheme/protocol\033[33m" << endl;
+                cout << "Please enter complete url, including \"http://\"\033[0m" << endl;
                 throw invalid_argument("Missing protocol/scheme");
             }
             // Check Protocol
@@ -60,6 +62,8 @@ class URL {
                 cout << "\033[31mInvalid Port number\033[0m" << endl;
                 throw invalid_argument("Invalid Port number");
             }
+            if (port != 80 && port != 0)
+                cout << "\033[33mThis program currently only support 80 port, will auto change to use port 80 to connect\033[0m" << endl;
 
             // Split the last path component by '?'
             pos = path.back().find('?');
@@ -101,7 +105,7 @@ class URL {
         }
         int getPort() {
             if (port > 0 && port < 65536) {
-                return port;
+                return 80;
             } else if (port == 0) {
                 return 80;
             } else {
@@ -129,12 +133,13 @@ typedef struct HTTP_Respond_Headers {
     int Content_length;
     string Content_type;
     string Connection;
+    string full_respond_header;
 } HTTP_Respond_Header;
 
 HTTP_Respond_Header ParseHeaders(string& respond_header) {
     HTTP_Respond_Header Header;
     size_t field_start, field_end;
-
+    
     // Extract status code
     field_start = respond_header.find("HTTP/1.1 ") + 9;
     field_end = respond_header.find("\r\n", field_start);
@@ -158,6 +163,9 @@ HTTP_Respond_Header ParseHeaders(string& respond_header) {
         field_end = respond_header.find("\r\n", field_start);
         Header.Connection = respond_header.substr(field_start, field_end - field_start);
     }
+
+    // Store Full Header
+    Header.full_respond_header = respond_header.substr(0,respond_header.find("\r\n\r\n"));
 
     return Header;
 }
@@ -220,11 +228,11 @@ bool isWritable(const string& filePath) {
 
 bool is_valid_url(const string& url) {
   // Use Regular Expression to validate url format
-  regex pattern("^([a-zA-Z]+://)?[a-zA-Z0-9-.]+(:[0-9]+)?/[a-zA-Z0-9-./?%&=]*)$");
+  regex pattern("^https?://[\\w\\.-]+(:\\d+)?(/\\s*)?$");
   return regex_match(url, pattern);
 }
 
-int HTTP_protocol(string host, string path, int port, string connection_type, string& body, HTTP_Respond_Header& Header) {
+int HTTP_protocol(string host, string path, int port, string connection_type, string& body, HTTP_Respond_Header& Header, bool print_request) {
     // resolve hostname to IP address
     struct hostent* hostaddr = gethostbyname(host.c_str());
     if (!hostaddr) {
@@ -251,12 +259,14 @@ int HTTP_protocol(string host, string path, int port, string connection_type, st
     }
 
     // Setup HTTP Request header
+    // request example = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nConnection: close\r\n\r\n";
     string request = "GET " + path + " HTTP/1.1\r\n";
     request += "HOST: " + host + "\r\n";
     request += "Connection: " + connection_type + "\r\n\r\n";
-    //char request[] = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\nConnection: close\r\n\r\n";
-    cout << "request: \n\033[32m" << request << "\033[0m" << endl;
-
+    // print request
+    if (print_request) {
+        cout << "\nrequest: \n\033[32m" << request << "\033[0m" << endl;
+    }
     // Send HTTP Request
     int n = send(sockfd, request.c_str(), strlen(request.c_str()), 0);
     if (n < 0) {
@@ -308,15 +318,13 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
     
     // create a directionary with name of hostname if not exist
     if (!filesystem::exists(fp)) filesystem::create_directory(fp);
-    cout << fp << endl;
 
     // create directionary according to file path if not exist
     for (int i = 0; i < file_dir_path.size()-1; i++) {
         fp /= file_dir_path[i];
         if (!filesystem::exists(fp)) filesystem::create_directory(fp);
-        cout << fp << endl;
     }
-    cout << "writing data in : " << fp / file_dir_path.back() << endl;
+    // cout << "\nwriting data in : " << fp / file_dir_path.back() << endl;
     // write data in
     outfile.open(fp / file_dir_path.back());
     outfile << file_data << endl;
@@ -324,6 +332,7 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
 }
 
 int main(int argc, char *argv[]) {
+    clock_t start_t, end_t;
     string input_url ,dir;
     cout << "Welcome to website downloader\n";
 
@@ -332,28 +341,35 @@ int main(int argc, char *argv[]) {
         input_url = argv[1];
         dir = argv[2];
     } else {
-        if (argc != 1) cout << "Invalid arguments, enter interactive mode\n";
+        if (argc != 1) cout << "\033[33mInvalid arguments, \033[0menter interactive mode\n";
         cout << "enter target url : ";
         cin >> input_url;
         cout << "enter storage directionary : ";
         cin >> dir;
     }
 
-    // check url format
-    // if (!is_valid_url(input_url))
-    //     cout << "\033[31mInvalid URL\033[0m" << endl;
+    // // check url format
+    // if (!is_valid_url(input_url)) {
+    //     cout << "\033[33mInvalid URL\033[0m" << endl;
+    //     return -1;
+    // }
+
+    // validate and decode url, create  into an URL object
     URL target_url(input_url);
-    target_url.PrintParsedURL();
-    cout << "\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
+    // target_url.PrintParsedURL();
+    cout << "\n\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
 
 
     // check file accessibility
     filesystem::path output_dir = dir;
     struct stat st;
-    if (!filesystem::exists(output_dir))
-        cout << "\033[31mOutput Directionary doesn't exist\033[0m" << endl;
-    else if (!isWritable(dir))
-        cout << "\033[31mOutput Directionary cannot access\033[0m" << endl;
+    if (!filesystem::exists(output_dir)) {
+        cout << "\033[33mOutput Directionary doesn't exist\033[0m\nPlease retry or change output directionary" << endl;
+        return -1;
+    } else if (!isWritable(dir)) {
+        cout << "\033[33mOutput Directionary cannot access\033[0m\nPlease retry or change output directionary" << endl;
+        return -1;
+    }
 
     cout << "\033[34mstorage directionary : \033[0m" << dir << endl;
 
@@ -361,8 +377,25 @@ int main(int argc, char *argv[]) {
     string connection_type = "close";
     string website_body;
     HTTP_Respond_Header respond_Header;
-    int status_code = HTTP_protocol(target_url.getHost(), target_url.getHTTPRequestPath(), target_url.getPort(), connection_type, website_body, respond_Header);
-    // cout << "body: " << endl << website_body << endl;
+    start_t = clock();
+    int status_code = HTTP_protocol(target_url.getHost(), target_url.getHTTPRequestPath(), target_url.getPort(), connection_type, website_body, respond_Header, true);
+    
+    // check response code
+    if (status_code >= 500 && status_code < 600) {
+        cout << "\033[33mServer Error\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease try again later" << endl;
+        return -1;
+    } else if (status_code >= 400 && status_code < 500) {
+        if (status_code == 404) cout << "\033[33mPage not found" << endl;
+        else cout << "\033[33mClient Side Error\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease check your request" << endl;
+        return -1;
+    } else if (status_code >= 300 && status_code < 400) {
+        cout << "\033[33mRedirected\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease update your request link" << endl;
+        return -1;
+    } else if (status_code != 200) {
+        cout << "error code \033[33m" << status_code << "\033[0m\nPlease try again" << endl;
+        return -1;
+    }
+    cout << "response: \033[32m" << endl << respond_Header.full_respond_header << "\033[0m\n" << endl;
 
     // find all image url
     vector<string> image_urls, image_path;
@@ -376,8 +409,8 @@ int main(int argc, char *argv[]) {
     HTTP_Respond_Header pic_Header;
     for (int i = 0, pos = 0; i < image_urls.size(); i++) {
         // send request and get picture
-        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header);
-
+        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header, false);
+        if (pic_status_code != 200) cout << "\033[33mDownload Picture content failed\033[0m" << endl;
         // decode image path
         string tmp = image_urls[i];
         // // Split the path by '/'
@@ -393,16 +426,13 @@ int main(int argc, char *argv[]) {
         // clear data after storage
         image_path.clear();
     }
-    // for (int i = 0; i < image_urls.size(); i++) 
-    //     cout << image_urls[i] << endl;
+    end_t = clock();
 
+    // print stat
+    cout << "url status: \033[34mOK\033[0m" << endl;
+    cout << "download webpage length : \033[34m" << respond_Header.Content_length << "\033[0m" << endl;
+    cout << "file count : \033[34m" << image_urls.size() + 1 << "\033[0m" << endl;
+    cout << "total time : \033[34m" << (float)(difftime(end_t, start_t))/CLOCKS_PER_SEC << " sec\033[0m" << endl;
 
-    // site.open(filepath, ios::out);
-    // if (site.is_open()) {
-    //     site.write(website.c_str(), sizeof(website));
-    //     site.close();
-    // } else {
-    //     std::cerr << "Error opening file: " << filepath << std::endl;
-    // }
     return 0;
 }
