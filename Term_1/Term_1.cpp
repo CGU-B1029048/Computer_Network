@@ -13,6 +13,22 @@
 
 using namespace std;
 
+// print colorful text
+string print_color(string color) {
+    int color_code = 0;
+    if (color == "red") {
+            return "\033[31m";
+    } else if (color =="green") {
+            return "\033[32m";
+    } else if (color =="yellow") {
+            return "\033[33m";
+    } else if (color =="blue") {
+            return "\033[34m";
+    } else {
+            return "\033[0m";
+    }
+}
+
 class URL {
     private:
         string scheme;
@@ -32,8 +48,8 @@ class URL {
                 scheme = url_str.substr(0, pos);
                 host = url_str.substr(pos + 3);
             } else {
-                cout << "\033[31mMissing scheme/protocol\033[33m" << endl;
-                cout << "Please enter complete url, including \"http://\"\033[0m" << endl;
+                cout << print_color("red") << "Missing scheme/protocol" << print_color("yellow") << endl;
+                cout << "Please enter complete url, including \"http://\"" << print_color("default") << endl;
                 throw invalid_argument("Missing protocol/scheme");
             }
             // Check Protocol
@@ -146,9 +162,11 @@ HTTP_Respond_Header ParseHeaders(string& respond_header) {
     Header.status_code = stoi(respond_header.substr(field_start, field_end - field_start));
 
     // Extract Content-Length
-    field_start = respond_header.find("Content-Length:") + 16;
-    field_end = respond_header.find("\r\n", field_start);
-    Header.Content_length = stoi(respond_header.substr(field_start, field_end - field_start));
+    if (respond_header.find("Content-Length:") != string::npos) {
+        field_start = respond_header.find("Content-Length:") + 16;
+        field_end = respond_header.find("\r\n", field_start);
+        Header.Content_length = stoi(respond_header.substr(field_start, field_end - field_start));
+    }
 
     // Extract Content-Type
     if (respond_header.find("Content-Type:") != string::npos) {
@@ -407,10 +425,23 @@ int main(int argc, char *argv[]) {
     // Download images
     string pictures;
     HTTP_Respond_Header pic_Header;
+    int image_total_size = 0;
+
+    cout << "Downloding Image Content now, total of \033[34m" << image_urls.size() << "\033[0m images." << endl; 
     for (int i = 0, pos = 0; i < image_urls.size(); i++) {
+        // print current downloading content
+        cout << endl;
+        cout << "\033[32mGET\033[0m Image " << i+1 << ". Path : \033[32m" << image_urls[i] << "\033[0m" << endl;
+
         // send request and get picture
+        clock_t pic_start_t = clock();
         int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header, false);
+        clock_t pic_end_t = clock();
+
+        // check image download status
         if (pic_status_code != 200) cout << "\033[33mDownload Picture content failed\033[0m" << endl;
+        else cout << "Download Picture content " << i+1 << " successful" << endl;
+
         // decode image path
         string tmp = image_urls[i];
         // // Split the path by '/'
@@ -423,16 +454,23 @@ int main(int argc, char *argv[]) {
         // store picture
         store_webpage(output_dir / target_url.getHost(), image_path, pictures);
 
+        // print image statistics.
+        cout << "image size : " << print_color("blue") << pic_Header.Content_length/1000 << print_color("default") << " kb" << endl; 
+        cout << "download time : " << print_color("blue") << (float)(difftime(pic_end_t, pic_start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
+
         // clear data after storage
+        image_total_size += pic_Header.Content_length;
         image_path.clear();
     }
     end_t = clock();
 
     // print stat
-    cout << "url status: \033[34mOK\033[0m" << endl;
-    cout << "download webpage length : \033[34m" << respond_Header.Content_length << "\033[0m" << endl;
-    cout << "file count : \033[34m" << image_urls.size() + 1 << "\033[0m" << endl;
-    cout << "total time : \033[34m" << (float)(difftime(end_t, start_t))/CLOCKS_PER_SEC << " sec\033[0m" << endl;
+    cout << endl;
+    cout << "url status: " << print_color("blue") << "OK" << print_color("default") << endl;
+    cout << "Current webpage length : " << print_color("blue") << respond_Header.Content_length << print_color("default") << " byte" << endl;
+    cout << "file size total : " << print_color("blue") << image_total_size/1000 << print_color("default") << " kb" << endl; 
+    cout << "file count : " << print_color("blue") << image_urls.size() + 1 << print_color("default") << "" << endl;
+    cout << "total time : " << print_color("blue") << (float)(difftime(end_t, start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
 
     return 0;
 }
