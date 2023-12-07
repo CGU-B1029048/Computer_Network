@@ -75,11 +75,11 @@ class URL {
             }
             // check port
             if (port < 0 || port > 65535) {
-                cout << "\033[31mInvalid Port number\033[0m" << endl;
+                cout << print_color("red") << "Invalid Port number" << print_color("default") << endl;
                 throw invalid_argument("Invalid Port number");
             }
             if (port != 80 && port != 0)
-                cout << "\033[33mThis program currently only support 80 port, will auto change to use port 80 to connect\033[0m" << endl;
+                cout << print_color("yellow") << "This program currently only support 80 port, will auto change to use port 80 to connect" << print_color("default") << endl;
 
             // Split the last path component by '?'
             pos = path.back().find('?');
@@ -239,7 +239,7 @@ bool isWritable(const string& filePath) {
       return false;
     }
   } else {
-    cerr << "Error retrieving file information" << endl;
+    cerr << print_color("red") << "Error retrieving file information" << print_color("default") << endl;
     return false;
   }
 }
@@ -283,7 +283,7 @@ int HTTP_protocol(string host, string path, int port, string connection_type, st
     request += "Connection: " + connection_type + "\r\n\r\n";
     // print request
     if (print_request) {
-        cout << "\nrequest: \n\033[32m" << request << "\033[0m" << endl;
+        cout << "\nrequest: \n" << print_color("green") << request << print_color("default") << endl;
     }
     // Send HTTP Request
     int n = send(sockfd, request.c_str(), strlen(request.c_str()), 0);
@@ -352,14 +352,14 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
 int main(int argc, char *argv[]) {
     clock_t start_t, end_t;
     string input_url ,dir;
-    cout << "Welcome to website downloader\n";
+    cout << "\nWelcome to website downloader\n";
 
     // argument parsing, usage : <pragram_name> url dir
     if (argc == 3) {
         input_url = argv[1];
         dir = argv[2];
     } else {
-        if (argc != 1) cout << "\033[33mInvalid arguments, \033[0menter interactive mode\n";
+        if (argc != 1) cout << print_color("yellow") << "Invalid arguments, " << print_color("default") << "enter interactive mode\n";
         cout << "enter target url : ";
         cin >> input_url;
         cout << "enter storage directionary : ";
@@ -375,21 +375,21 @@ int main(int argc, char *argv[]) {
     // validate and decode url, create  into an URL object
     URL target_url(input_url);
     // target_url.PrintParsedURL();
-    cout << "\n\033[34mtarget url : \033[0m" << target_url.PrintURL() << endl;
+    cout << print_color("blue") << "\ntarget url : " << print_color("default") << target_url.PrintURL() << endl;
 
 
     // check file accessibility
     filesystem::path output_dir = dir;
     struct stat st;
     if (!filesystem::exists(output_dir)) {
-        cout << "\033[33mOutput Directionary doesn't exist\033[0m\nPlease retry or change output directionary" << endl;
+        cout << print_color("yellow") << "Output Directionary doesn't exist" << print_color("default") << "\nPlease retry or change output directionary" << endl;
         return -1;
     } else if (!isWritable(dir)) {
-        cout << "\033[33mOutput Directionary cannot access\033[0m\nPlease retry or change output directionary" << endl;
+        cout << print_color("yellow") << "Output Directionary cannot access" << print_color("default") << "\nPlease retry or change output directionary" << endl;
         return -1;
     }
 
-    cout << "\033[34mstorage directionary : \033[0m" << dir << endl;
+    cout << print_color("blue") << "storage directionary : " << print_color("default") << dir << endl;
 
     // send request
     string connection_type = "close";
@@ -413,7 +413,7 @@ int main(int argc, char *argv[]) {
         cout << "error code \033[33m" << status_code << "\033[0m\nPlease try again" << endl;
         return -1;
     }
-    cout << "response: \033[32m" << endl << respond_Header.full_respond_header << "\033[0m\n" << endl;
+    cout << "response: " << print_color("green") << endl << respond_Header.full_respond_header << print_color("default") << endl << endl;
 
     // find all image url
     vector<string> image_urls, image_path;
