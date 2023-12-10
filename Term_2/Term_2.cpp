@@ -213,7 +213,8 @@ vector<string> Extract_image(string& body, string host) {
 
             // Extract path
             urls[i] = urls[i].substr(path_start, path_end - path_start);
-            urls[i] = urls[i].substr(host.length() + 1);            
+            if (urls[i].substr(0, host.length()) == host) 
+                urls[i] = urls[i].substr(host.length() + 1);            
         }
 
         if (urls[i].at(0) == '/') urls[i].erase(0,1);
@@ -330,6 +331,34 @@ int HTTP_protocol(string host, string path, int port, string connection_type, st
     return Header.status_code;
   }
 
+int check_response_status(int status_code) {
+    // Server Error
+    if (status_code >= 500 && status_code < 600) {
+        cout << print_color("yellow");
+        cout << "Server Error" << print_color("default") << " : error code " << print_color("yellow") << status_code;
+        cout << print_color("default") << "\nPlease try again later" << endl;
+        return -1;
+    } else if (status_code >= 400 && status_code < 500) {
+        cout << print_color("yellow") << "Client Error" << print_color("default") << " : error code " << print_color("yellow") << status_code << " ";
+        if (status_code == 404) cout << "Page not found" << endl;
+        else if (status_code == 403) cout << "Forbidden" << endl;
+        else if (status_code == 401) cout << "Unauthorized" << endl;
+        cout << print_color("default") << "\nPlease check your request" << endl;
+        return -1;
+    } else if (status_code >= 300 && status_code < 400) {
+        cout << print_color("yellow") << "Redirected" << print_color("default") << " : error code " << print_color("yellow") << status_code << " ";
+        if (status_code == 301) cout << "Moved Permanently";
+        cout << print_color("default") << "\nPlease update your request link" << endl;
+        return -1;
+    } else if (status_code >= 200 && status_code < 300) {
+        if (status_code != 200) cout << print_color("green") << "Success " << status_code << print_color("default") << endl; 
+        return 0;
+    } else {
+        cout << "error code \033[33m" << status_code << "\033[0m\nPlease try again" << endl;
+        return -1;
+    }
+}
+
 void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, string file_data) {
     filesystem::path fp = src_dir;
     ofstream outfile;
@@ -347,6 +376,56 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
     outfile.open(fp / file_dir_path.back());
     outfile << file_data << endl;
     outfile.close();
+}
+
+int download_image_in_webpage(URL target_url, vector<string> image_urls, string connection_type, filesystem::path output_dir) {
+    // Download images
+    string pictures;
+    HTTP_Respond_Header pic_Header;
+    int image_total_size = 0;
+    vector<string> image_path;
+
+    cout << "Downloding Image Content from " << print_color("blue") << target_url.PrintURL() << print_color("default");
+    cout << ", total of " << print_color("blue") << image_urls.size() << print_color("default") << " images." << endl; 
+    
+    for (int i = 0, pos = 0; i < image_urls.size(); i++) {
+        // print current downloading content
+        cout << endl;
+        cout << print_color("green") << "GET" << print_color("default") << " Image " << i+1 << ". Path : " << print_color("green") << image_urls[i] << print_color("default") << endl;
+
+        // send request and get picture
+        clock_t pic_start_t = clock();
+        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header, false);
+        clock_t pic_end_t = clock();
+
+        // check image download status
+        if (check_response_status(pic_status_code) < 0) cout << print_color("yellow") << "Download Picture content failed" << print_color("default") << endl;
+        else  {
+            cout << "estimated time : " << print_color("blue") << (float)(difftime(pic_end_t, pic_start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
+            cout << "Download Picture content " << i+1 << " successful" << endl;
+        }
+        // decode image path
+        string tmp = image_urls[i];
+        
+        // // Split the path by '/'
+        while ((pos = tmp.find('/', 0)) != string::npos) {
+            image_path.push_back(tmp.substr(0, pos));
+            tmp = tmp.substr(pos + 1);
+        }
+        image_path.push_back(tmp);
+
+        // store picture
+        store_webpage(output_dir / target_url.getHost(), image_path, pictures);
+
+        // print image statistics.
+        cout << "image size : " << print_color("blue") << pic_Header.Content_length/1000 << print_color("default") << " kb" << endl; 
+        cout << "download progress " << print_color("blue") << i+1 << " / " << image_urls.size() << print_color("default") << endl;
+
+        // clear data after storage
+        image_total_size += pic_Header.Content_length;
+        image_path.clear();
+    }
+    return image_total_size;
 }
 
 int main(int argc, char *argv[]) {
@@ -399,80 +478,28 @@ int main(int argc, char *argv[]) {
     int status_code = HTTP_protocol(target_url.getHost(), target_url.getHTTPRequestPath(), target_url.getPort(), connection_type, website_body, respond_Header, true);
     
     // check response code
-    if (status_code >= 500 && status_code < 600) {
-        cout << "\033[33mServer Error\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease try again later" << endl;
-        return -1;
-    } else if (status_code >= 400 && status_code < 500) {
-        if (status_code == 404) cout << "\033[33mPage not found" << endl;
-        else cout << "\033[33mClient Side Error\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease check your request" << endl;
-        return -1;
-    } else if (status_code >= 300 && status_code < 400) {
-        cout << "\033[33mRedirected\033[0m : error code \033[33m" << status_code << "\033[0m\nPlease update your request link" << endl;
-        return -1;
-    } else if (status_code != 200) {
-        cout << "error code \033[33m" << status_code << "\033[0m\nPlease try again" << endl;
-        return -1;
-    }
+    if (check_response_status(status_code) < 0) return -1;
     cout << "response: " << print_color("green") << endl << respond_Header.full_respond_header << print_color("default") << endl << endl;
 
     // find all image url
-    vector<string> image_urls, image_path;
+    vector<string> image_urls;
     image_urls = Extract_image(website_body, target_url.getHost());
 
     // store webpage in file
     store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
 
     // Download images
-    string pictures;
-    HTTP_Respond_Header pic_Header;
-    int image_total_size = 0;
-
-    cout << "Downloding Image Content now, total of " << print_color("blue") << image_urls.size() << print_color("default") << " images." << endl; 
-    for (int i = 0, pos = 0; i < image_urls.size(); i++) {
-        // print current downloading content
-        cout << endl;
-        cout << print_color("green") << "GET" << print_color("default") << " Image " << i+1 << ". Path : " << print_color("green") << image_urls[i] << print_color("default") << endl;
-
-        // send request and get picture
-        clock_t pic_start_t = clock();
-        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header, false);
-        clock_t pic_end_t = clock();
-
-        // check image download status
-        if (pic_status_code != 200) cout << print_color("yellow") << "Download Picture content failed" << print_color("default") << endl;
-        else  {
-            cout << "estimated time : " << print_color("blue") << (float)(difftime(pic_end_t, pic_start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
-            cout << "Download Picture content " << i+1 << " successful" << endl;
-        }
-        // decode image path
-        string tmp = image_urls[i];
-        
-        // // Split the path by '/'
-        while ((pos = tmp.find('/', 0)) != string::npos) {
-            image_path.push_back(tmp.substr(0, pos));
-            tmp = tmp.substr(pos + 1);
-        }
-        image_path.push_back(tmp);
-
-        // store picture
-        store_webpage(output_dir / target_url.getHost(), image_path, pictures);
-
-        // print image statistics.
-        cout << "image size : " << print_color("blue") << pic_Header.Content_length/1000 << print_color("default") << " kb" << endl; 
-        cout << "download progress " << print_color("blue") << i+1 << " / " << image_urls.size() << print_color("default") << endl;
-
-        // clear data after storage
-        image_total_size += pic_Header.Content_length;
-        image_path.clear();
-    }
+    int total_file_size = 0, total_file_count = 0;
+    total_file_size += download_image_in_webpage(target_url, image_urls, connection_type, output_dir);
+    total_file_count += image_urls.size();
     end_t = clock();
 
     // print stat
     cout << endl;
     cout << "url status: " << print_color("blue") << "OK" << print_color("default") << endl;
     cout << "Current webpage length : " << print_color("blue") << respond_Header.Content_length << print_color("default") << " byte" << endl;
-    cout << "file size total : " << print_color("blue") << image_total_size/1000 << print_color("default") << " kb" << endl; 
-    cout << "file count : " << print_color("blue") << image_urls.size() + 1 << print_color("default") << "" << endl;
+    cout << "file size total : " << print_color("blue") << total_file_size/1000 << print_color("default") << " kb" << endl; 
+    cout << "file count : " << print_color("blue") << total_file_count << print_color("default") << "" << endl;
     cout << "total time : " << print_color("blue") << (float)(difftime(end_t, start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
 
     return 0;
