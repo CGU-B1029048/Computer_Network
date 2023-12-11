@@ -152,6 +152,12 @@ typedef struct HTTP_Respond_Headers {
     string full_respond_header;
 } HTTP_Respond_Header;
 
+typedef struct link_nodes {
+    string link;
+    string host;
+    bool visited;
+} link_node;
+
 HTTP_Respond_Header ParseHeaders(string& respond_header) {
     HTTP_Respond_Header Header;
     size_t field_start, field_end;
@@ -227,6 +233,57 @@ vector<string> Extract_image(string& body, string host) {
     }
 
     return urls;
+}
+
+void Extract_link(string& body, string host, vector<link_node>& link_queue) {
+    link_node cur_link_node;
+    size_t link_tag_start = 0, link_tag_end, i = 0;
+    while (body.find("<a", link_tag_start) != string::npos) {
+        // find <img> tag
+        link_tag_start = body.find("<a", link_tag_start);
+        link_tag_end = body.find(">", link_tag_start);
+
+        // extract src from <img>
+        link_tag_start = body.find("href=", link_tag_start) + 6; 
+        link_tag_end = body.find('\"', link_tag_start);
+        
+        cur_link_node.link = body.substr(link_tag_start, link_tag_end - link_tag_start);
+        cur_link_node.visited = false;
+
+        // check link is in relative path
+        if (cur_link_node.link.find("http://") != string::npos || cur_link_node.link.find("https://") != string::npos) {
+            // Extract path and query components
+            size_t path_start = cur_link_node.link.find("//") + 2;
+            size_t path_end = cur_link_node.link.find('?', path_start);
+            if (path_end == string::npos) {
+                path_end = cur_link_node.link.size();
+            }
+
+            // Extract path
+            cur_link_node.link = cur_link_node.link.substr(path_start, path_end - path_start);
+            path_end = cur_link_node.link.find("/");
+            if (path_end == string::npos) path_end = cur_link_node.link.size();
+            cur_link_node.host = cur_link_node.link.substr(0, path_end);
+            if (path_end == cur_link_node.link.size()) cur_link_node.link = "/";
+            else cur_link_node.link = cur_link_node.link.substr(path_end + 1);            
+        }
+
+        if (cur_link_node.link.empty()) cur_link_node.link = "/index.htm";
+        else if (cur_link_node.link == "/") cur_link_node.link = "/index.htm";
+        if (cur_link_node.link.at(0) == '/') cur_link_node.link.erase(0,1);
+        
+        if (cur_link_node.host.empty()) cur_link_node.host = host;
+
+        // Update website with relative URL
+        if (cur_link_node.host != host) body.replace(link_tag_start, link_tag_end - link_tag_start, "../"+ cur_link_node.host +'/'+ cur_link_node.link);
+        else body.replace(link_tag_start, link_tag_end - link_tag_start, cur_link_node.link);
+
+        link_tag_start++;
+        i++;
+
+        if (cur_link_node.link != "index.htm" || cur_link_node.host != host)
+            link_queue.push_back(cur_link_node);
+    }
 }
 
 bool isWritable(const string& filePath) {
@@ -378,24 +435,26 @@ void store_webpage(filesystem::path src_dir, vector<string> file_dir_path, strin
     outfile.close();
 }
 
-int download_image_in_webpage(URL target_url, vector<string> image_urls, string connection_type, filesystem::path output_dir) {
+int download_image_in_webpage(string host, int port, string cur_page, vector<string> image_urls, string connection_type, filesystem::path output_dir) {
     // Download images
     string pictures;
     HTTP_Respond_Header pic_Header;
     int image_total_size = 0;
     vector<string> image_path;
 
-    cout << "Downloding Image Content from " << print_color("blue") << target_url.PrintURL() << print_color("default");
+    if (image_urls.empty()) return 0;
+
+    cout << "Downloding Image Content from " << print_color("blue") << cur_page << print_color("default");
     cout << ", total of " << print_color("blue") << image_urls.size() << print_color("default") << " images." << endl; 
-    
+
     for (int i = 0, pos = 0; i < image_urls.size(); i++) {
         // print current downloading content
         cout << endl;
-        cout << print_color("green") << "GET" << print_color("default") << " Image " << i+1 << ". Path : " << print_color("green") << image_urls[i] << print_color("default") << endl;
+        cout << print_color("green") << "GET" << print_color("default") << " Image " << i+1 << ". Path : " << print_color("green") << host +'/'+ image_urls[i] << print_color("default") << endl;
 
         // send request and get picture
         clock_t pic_start_t = clock();
-        int pic_status_code = HTTP_protocol(target_url.getHost(), '/' + image_urls[i], target_url.getPort(), connection_type, pictures, pic_Header, false);
+        int pic_status_code = HTTP_protocol(host, '/' + image_urls[i], port, connection_type, pictures, pic_Header, false);
         clock_t pic_end_t = clock();
 
         // check image download status
@@ -415,7 +474,7 @@ int download_image_in_webpage(URL target_url, vector<string> image_urls, string 
         image_path.push_back(tmp);
 
         // store picture
-        store_webpage(output_dir / target_url.getHost(), image_path, pictures);
+        store_webpage(output_dir / host, image_path, pictures);
 
         // print image statistics.
         cout << "image size : " << print_color("blue") << pic_Header.Content_length/1000 << print_color("default") << " kb" << endl; 
@@ -431,19 +490,31 @@ int download_image_in_webpage(URL target_url, vector<string> image_urls, string 
 int main(int argc, char *argv[]) {
     clock_t start_t, end_t;
     string input_url ,dir;
+    int recursive_depth, download_external_content;
     cout << "\nWelcome to website downloader\n";
 
     // argument parsing, usage : <pragram_name> url dir
-    if (argc == 3) {
+    if (argc == 4) {
         input_url = argv[1];
         dir = argv[2];
+        recursive_depth = atoi(argv[3]);
     } else {
         if (argc != 1) cout << print_color("yellow") << "Invalid arguments, " << print_color("default") << "enter interactive mode\n";
         cout << "enter target url : ";
         cin >> input_url;
         cout << "enter storage directionary : ";
         cin >> dir;
+        cout << "enter recursive depth : ";
+        cin >> recursive_depth;
     }
+    // enter download external content or not
+    while (true) {
+    cout << "Do you want to download external content? [1 (yes)/0 (no)]";
+    cin >> download_external_content;
+    if (download_external_content == 0 || download_external_content == 1) break; 
+    cout << print_color("yellow") << "Invalid argument" << print_color("default") << ", please enter 0 or 1 for no and yes";
+    }
+
 
     // // check url format
     // if (!is_valid_url(input_url)) {
@@ -481,23 +552,102 @@ int main(int argc, char *argv[]) {
     if (check_response_status(status_code) < 0) return -1;
     cout << "response: " << print_color("green") << endl << respond_Header.full_respond_header << print_color("default") << endl << endl;
 
-    // find all image url
     vector<string> image_urls;
-    image_urls = Extract_image(website_body, target_url.getHost());
+    vector<link_node> link_queue;
+    if (respond_Header.Content_type.find("text/html") != string::npos) {
+        // find all image url
+        image_urls = Extract_image(website_body, target_url.getHost());
+
+        // find all hyperlink
+        Extract_link(website_body, target_url.getHost(), link_queue);
+    }
+
+    // for (int i = 0; i < link_queue.size(); i++) {
+    //     cout << link_queue[i].link << endl;
+    // }
+    // cout << endl;
 
     // store webpage in file
     store_webpage(output_dir / target_url.getHost(), target_url.getPath(), website_body);
 
     // Download images
     int total_file_size = 0, total_file_count = 0;
-    total_file_size += download_image_in_webpage(target_url, image_urls, connection_type, output_dir);
+    total_file_size += download_image_in_webpage(target_url.getHost(), target_url.getPort(), target_url.PrintURL(), image_urls, connection_type, output_dir);
     total_file_count += image_urls.size();
+
+    // Begin BFS for recursive download website
+    for (int layer = 0; layer < recursive_depth; layer++) {
+        // mark link as visited
+        for (int i = 0; i < link_queue.size(); i++) {
+            link_queue[i].visited = true;
+        }
+
+        if (link_queue.empty()) {
+            cout << print_color("yellow") << "recursive halt, no further depth" << print_color("default") << endl;
+            break;
+        }
+
+        cout << print_color("blue") << "\nbegin recursive depth " << layer+1 << print_color("default") << endl;
+
+        // begin layer i download
+        while (link_queue.front().visited) {
+            link_node current = link_queue.front();
+            vector<string> curr_path;
+            int pos;
+
+            // // Split the path by '/'
+            string tmp = current.link;
+            while ((pos = tmp.find('/', 0)) != string::npos) {
+                curr_path.push_back(tmp.substr(0, pos));
+                tmp = tmp.substr(pos + 1);
+            }
+            curr_path.push_back(tmp);
+
+            // print get which file
+            cout << endl;
+            cout << print_color("green") << "GET" << print_color("default") << ". Path : " << print_color("green") << current.host + '/' + current.link << print_color("default") << endl;
+
+            // send http request
+            clock_t link_start = clock();
+            int status_code = HTTP_protocol(current.host, '/' + current.link, target_url.getPort(), connection_type, website_body, respond_Header, false);
+            clock_t link_end = clock();
+
+            // add statistics
+            if (respond_Header.Content_type.find("text/html") == string::npos) {
+                cout << "estimated time : " << print_color("blue") << (float)(difftime(link_start, link_end))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
+                cout << "Download content " << " successful" << endl;
+                cout << "File size : " << print_color("blue") << respond_Header.Content_length/1000 << print_color("default") << " kb" << endl; 
+                total_file_count++;
+                total_file_size += respond_Header.Content_length;
+            }
+
+            // check respond status code
+            if (check_response_status(status_code) < 0) cout << print_color("yellow") << "Content : " << current.host+'/'+current.link << "failed to download" << print_color("default") << endl;
+
+            if (respond_Header.Content_type.find("text/html") != string::npos) {
+                // find all image url
+                image_urls = Extract_image(website_body, current.host);
+
+                // find all hyperlink
+                Extract_link(website_body, current.host, link_queue);
+            }
+
+            // store webpage in file
+            store_webpage(output_dir / current.host, curr_path, website_body);
+
+            // Download images
+            total_file_size += download_image_in_webpage(current.host, target_url.getPort(), current.link, image_urls, connection_type, output_dir);
+            total_file_count += image_urls.size();
+
+            link_queue.erase(link_queue.begin());
+        }
+    }
+
     end_t = clock();
 
     // print stat
     cout << endl;
     cout << "url status: " << print_color("blue") << "OK" << print_color("default") << endl;
-    cout << "Current webpage length : " << print_color("blue") << respond_Header.Content_length << print_color("default") << " byte" << endl;
     cout << "file size total : " << print_color("blue") << total_file_size/1000 << print_color("default") << " kb" << endl; 
     cout << "file count : " << print_color("blue") << total_file_count << print_color("default") << "" << endl;
     cout << "total time : " << print_color("blue") << (float)(difftime(end_t, start_t))/CLOCKS_PER_SEC << print_color("default") << " sec" << endl;
